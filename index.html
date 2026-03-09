@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local LLM Predictor</title>
+    <!-- Tailwind CSS for trendy styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            400: '#38bdf8', // Light blue
+                            500: '#8b5cf6', // Purple
+                            600: '#6d28d9', // Dark Purple
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel to compile JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Marked for safely rendering the AI's markdown response -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        body { 
+            background-color: #020617; /* Very dark slate */
+            color: #f8fafc; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            background-image: radial-gradient(circle at top right, rgba(139, 92, 246, 0.15), transparent 40%),
+                              radial-gradient(circle at bottom left, rgba(56, 189, 248, 0.15), transparent 40%);
+            background-attachment: fixed;
+        }
+        .glass-panel { 
+            background: rgba(30, 41, 59, 0.6); 
+            backdrop-filter: blur(16px); 
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.1); 
+        }
+        
+        /* Styling the Markdown output */
+        .prose h1, .prose h2, .prose h3 { color: #f8fafc; margin-top: 1.5em; margin-bottom: 0.5em; font-weight: 700; }
+        .prose h2 { font-size: 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 0.5rem; }
+        .prose p { margin-bottom: 1em; line-height: 1.7; color: #cbd5e1; }
+        .prose ul { list-style-type: none; padding-left: 0; margin-bottom: 1em; }
+        .prose ul li { position: relative; padding-left: 1.5rem; margin-bottom: 0.5rem; color: #cbd5e1;}
+        .prose ul li::before { content: "✨"; position: absolute; left: 0; top: 0px; font-size: 0.9em; }
+        .prose strong { color: #38bdf8; font-weight: 600; }
+        .prose code { background: rgba(0,0,0,0.3); padding: 0.2rem 0.4rem; border-radius: 0.25rem; color: #e2e8f0; font-family: monospace; }
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState } = React;
+
+        // The main application component
+        function App() {
+            // State to hold the user's selected specifications
+            const [specs, setSpecs] = useState({
+                os: 'macOS',
+                cpu: 'Apple M1 Max',
+                ram: '32GB',
+                gpu: 'Apple Unified Memory (M-Series)'
+            });
+
+            // State for the API Key (useful if running locally outside of the Canvas environment)
+            const [customApiKey, setCustomApiKey] = useState('');
+
+            // State for app status
+            const [loading, setLoading] = useState(false);
+            const [result, setResult] = useState('');
+            const [error, setError] = useState('');
+
+            // Helper function to call the Gemini AI API with retries
+            const fetchAIPrediction = async (promptText) => {
+                // Use the custom key if provided, otherwise default to empty string so the Canvas environment can inject it
+                const apiKey = customApiKey.trim() || ""; 
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+                
+                const payload = {
+                    contents: [{ parts: [{ text: promptText }] }],
+                    systemInstruction: {
+                        parts: [{ text: "You are an expert AI hardware consultant. Your goal is to analyze computer specs, point out technical advantages/bottlenecks for running local LLMs, and recommend the top 3 best local AI models that will run smoothly on their specific machine. Use a trendy, enthusiastic, and highly technical tone. Format the response nicely using Markdown." }]
+                    }
+                };
+
+                let attempt = 0;
+                const maxRetries = 5;
+                const delays = [1000, 2000, 4000, 8000, 16000];
+
+                while (attempt < maxRetries) {
+                    try {
+                        const response = await fetch(url, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
+                        if (!response.ok) {
+                            // If it's an authentication error (like missing API key when running locally), stop retrying
+                            if (response.status === 401 || response.status === 403) {
+                                throw new Error(`Authentication Error (${response.status}): If you are running this locally on your machine, please paste a valid Gemini API Key in the field below. If using the preview, verify your environment setup.`);
+                            }
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        
+                        const data = await response.json();
+                        return data.candidates?.[0]?.content?.parts?.[0]?.text || "No prediction generated.";
+                    } catch (err) {
+                        // Immediately throw auth errors without retrying
+                        if (err.message.includes("Authentication Error")) {
+                            throw err;
+                        }
+                        
+                        attempt++;
+                        if (attempt >= maxRetries) throw err;
+                        await new Promise(resolve => setTimeout(resolve, delays[attempt - 1]));
+                    }
+                }
+            };
+
+            // Handle the form submission
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                setLoading(true);
+                setError('');
+                setResult('');
+
+                const prompt = `Analyze these computer specs for running Local LLMs:
+                OS: ${specs.os}
+                CPU: ${specs.cpu}
+                RAM: ${specs.ram}
+                GPU: ${specs.gpu}
+                
+                Please provide:
+                1. A brief "AI Magic" analysis: What do these specs mean for AI? (e.g., mention how unified memory works if it's a Mac).
+                2. Recommendations: The top 3 local LLMs (like Llama 3, Mistral, etc.) that are the absolute best fit for this machine.
+                3. Expected Performance: What tokens/second or general speed they can expect.
+                4. Recommended Software: What app should they use to run it? (e.g., LM Studio, Ollama).`;
+
+                try {
+                    const aiResponse = await fetchAIPrediction(prompt);
+                    setResult(aiResponse);
+                } catch (err) {
+                    setError(err.message || "Oops! The AI prediction failed. Please try again.");
+                    console.error(err);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            // Handle changes in the dropdowns
+            const handleChange = (e) => {
+                setSpecs({ ...specs, [e.target.name]: e.target.value });
+            };
+
+            return (
+                <div className="min-h-screen py-12 px-4 sm:px-6 lg:px-8 flex flex-col items-center">
+                    
+                    {/* Header Section */}
+                    <div className="text-center max-w-3xl mb-12">
+                        <h1 className="text-5xl font-extrabold tracking-tight mb-4 text-transparent bg-clip-text bg-gradient-to-r from-brand-400 to-brand-500">
+                            Local LLM Predictor
+                        </h1>
+                        <p className="text-lg text-slate-400">
+                            Select your rig's specs below. Our AI magic will analyze your hardware and recommend the absolute best local AI models you can run right now.
+                        </p>
+                    </div>
+
+                    <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-12 gap-8">
+                        
+                        {/* Input Form Column */}
+                        <div className="lg:col-span-5">
+                            <div className="glass-panel rounded-2xl p-8 shadow-2xl">
+                                <h2 className="text-2xl font-bold mb-6 flex items-center text-white">
+                                    <svg className="w-6 h-6 mr-3 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
+                                    Your Specs
+                                </h2>
+                                
+                                <form onSubmit={handleSubmit} className="space-y-5">
+                                    {/* OS Selector */}
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300 mb-1">Operating System</label>
+                                        <select name="os" value={specs.os} onChange={handleChange} className="w-full bg-slate-800/50 border border-slate-600 rounded-lg py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition">
+                                            <option value="macOS">macOS</option>
+                                            <option value="Windows 11">Windows 11</option>
+                                            <option value="Windows 10">Windows 10</option>
+                                            <option value="Linux (Ubuntu/Debian)">Linux (Ubuntu/Debian)</option>
+                                        </select>
+                                    </div>
+
+                                    {/* CPU Selector */}
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300 mb-1">Processor (CPU)</label>
+                                        <select name="cpu" value={specs.cpu} onChange={handleChange} className="w-full bg-slate-800/50 border border-slate-600 rounded-lg py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition">
+                                            <optgroup label="Apple Silicon">
+                                                <option value="Apple M1/M2/M3 Base">Apple M1/M2/M3 (Base)</option>
+                                                <option value="Apple M1/M2/M3 Pro">Apple M1/M2/M3 Pro</option>
+                                                <option value="Apple M1 Max">Apple M1 Max</option>
+                                                <option value="Apple M2/M3 Max">Apple M2/M3 Max</option>
+                                                <option value="Apple M1/M2 Ultra">Apple M1/M2 Ultra</option>
+                                            </optgroup>
+                                            <optgroup label="Intel">
+                                                <option value="Intel Core i5 (Recent Gen)">Intel Core i5</option>
+                                                <option value="Intel Core i7 (Recent Gen)">Intel Core i7</option>
+                                                <option value="Intel Core i9 (Recent Gen)">Intel Core i9</option>
+                                            </optgroup>
+                                            <optgroup label="AMD">
+                                                <option value="AMD Ryzen 5">AMD Ryzen 5</option>
+                                                <option value="AMD Ryzen 7">AMD Ryzen 7</option>
+                                                <option value="AMD Ryzen 9">AMD Ryzen 9</option>
+                                            </optgroup>
+                                        </select>
+                                    </div>
+
+                                    {/* RAM Selector */}
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300 mb-1">System Memory (RAM)</label>
+                                        <select name="ram" value={specs.ram} onChange={handleChange} className="w-full bg-slate-800/50 border border-slate-600 rounded-lg py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition">
+                                            <option value="8GB">8 GB (Entry Level)</option>
+                                            <option value="16GB">16 GB (Standard)</option>
+                                            <option value="24GB">24 GB</option>
+                                            <option value="32GB">32 GB (Power User)</option>
+                                            <option value="64GB">64 GB (Pro)</option>
+                                            <option value="128GB+">128 GB+ (Beast)</option>
+                                        </select>
+                                    </div>
+
+                                    {/* GPU Selector */}
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300 mb-1">Graphics Card (GPU)</label>
+                                        <select name="gpu" value={specs.gpu} onChange={handleChange} className="w-full bg-slate-800/50 border border-slate-600 rounded-lg py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition">
+                                            <option value="Apple Unified Memory (M-Series)">Apple Unified Memory (Built-in)</option>
+                                            <optgroup label="NVIDIA (Requires VRAM)">
+                                                <option value="NVIDIA RTX 3060/4060 (8GB VRAM)">NVIDIA RTX 3060/4060 (8GB VRAM)</option>
+                                                <option value="NVIDIA RTX 3070/4070 (12GB VRAM)">NVIDIA RTX 3070/4070 (12GB VRAM)</option>
+                                                <option value="NVIDIA RTX 3080/4080 (16GB VRAM)">NVIDIA RTX 3080/4080 (16GB VRAM)</option>
+                                                <option value="NVIDIA RTX 3090/4090 (24GB VRAM)">NVIDIA RTX 3090/4090 (24GB VRAM)</option>
+                                            </optgroup>
+                                            <optgroup label="AMD / Other">
+                                                <option value="AMD Radeon RX 7800/7900">AMD Radeon RX 7800/7900</option>
+                                                <option value="Integrated Graphics Only">Integrated Graphics Only (No Dedicated GPU)</option>
+                                            </optgroup>
+                                        </select>
+                                    </div>
+                                    
+                                    <hr className="border-slate-700 my-4" />
+                                    
+                                    {/* Optional API Key Input for Local Execution */}
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300 mb-1">Gemini API Key <span className="text-slate-500 text-xs">(Required for local use only)</span></label>
+                                        <input 
+                                            type="password" 
+                                            name="customApiKey"
+                                            value={customApiKey} 
+                                            onChange={(e) => setCustomApiKey(e.target.value)} 
+                                            placeholder="Leave empty if using Canvas preview"
+                                            className="w-full bg-slate-800/50 border border-slate-600 rounded-lg py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition text-sm"
+                                        />
+                                    </div>
+
+                                    <button 
+                                        type="submit" 
+                                        disabled={loading}
+                                        className={`w-full mt-6 py-4 px-4 rounded-lg font-bold text-white text-lg transition-all duration-300 transform hover:scale-[1.02] ${loading ? 'bg-slate-600 cursor-not-allowed' : 'bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 shadow-lg shadow-brand-500/30'}`}
+                                    >
+                                        {loading ? (
+                                            <span className="flex items-center justify-center">
+                                                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                                AI is Analyzing Specs...
+                                            </span>
+                                        ) : 'Predict My Local LLMs ✨'}
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+
+                        {/* Results Column */}
+                        <div className="lg:col-span-7 mt-8 lg:mt-0">
+                            <div className="glass-panel rounded-2xl p-8 shadow-2xl h-full min-h-[500px] flex flex-col relative overflow-hidden">
+                                
+                                {!result && !loading && !error && (
+                                    <div className="flex-grow flex flex-col items-center justify-center text-center opacity-50">
+                                        <svg className="w-24 h-24 mb-6 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"></path></svg>
+                                        <h3 className="text-xl font-medium text-white mb-2">Awaiting System Scan</h3>
+                                        <p className="text-slate-400 max-w-sm">Hit the predict button to see which advanced AI models can run completely offline on your hardware.</p>
+                                    </div>
+                                )}
+
+                                {loading && (
+                                    <div className="flex-grow flex flex-col items-center justify-center">
+                                        <div className="w-16 h-16 border-4 border-brand-500/30 border-t-brand-500 rounded-full animate-spin mb-6"></div>
+                                        <p className="text-brand-400 font-medium animate-pulse">Running AI Hardware Analysis...</p>
+                                    </div>
+                                )}
+
+                                {error && (
+                                    <div className="bg-red-900/50 border border-red-500/50 text-red-200 p-4 rounded-lg flex items-start text-left">
+                                        <svg className="w-6 h-6 mr-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                        <span className="text-sm">{error}</span>
+                                    </div>
+                                )}
+
+                                {result && !loading && (
+                                    <div className="flex-grow overflow-y-auto pr-2 custom-scrollbar">
+                                        <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-700">
+                                            <h3 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400">
+                                                Analysis Complete
+                                            </h3>
+                                            <span className="bg-emerald-500/20 text-emerald-400 text-xs font-bold px-3 py-1 rounded-full border border-emerald-500/30">
+                                                Hardware Match Found
+                                            </span>
+                                        </div>
+                                        
+                                        {/* Render the Markdown from Gemini */}
+                                        <div 
+                                            className="prose"
+                                            dangerouslySetInnerHTML={{ __html: marked.parse(result) }}
+                                        />
+                                    </div>
+                                )}
+
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
