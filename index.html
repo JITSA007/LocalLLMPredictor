@@ -96,6 +96,9 @@
             // State to handle which input mode the user prefers
             const [inputMode, setInputMode] = useState('manual'); // 'manual' or 'device'
 
+            // State for the API Key required for GitHub pages
+            const [customApiKey, setCustomApiKey] = useState('');
+
             // State for manual specifications
             const [specs, setSpecs] = useState({
                 os: 'macOS',
@@ -116,8 +119,12 @@
             const [error, setError] = useState('');
 
             const fetchAIPrediction = async (promptText) => {
-                const apiKey = ""; 
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+                const apiKey = customApiKey.trim() || ""; 
+                
+                // If a user provides an API key (like on GitHub pages), we use the stable 1.5-flash model.
+                // If no key is provided (like in the Canvas preview here), it defaults to the preview model.
+                const modelName = apiKey ? "gemini-1.5-flash" : "gemini-2.5-flash-preview-09-2025";
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
                 
                 const systemPrompt = "You are an expert AI hardware consultant. Your goal is to analyze computer specs, point out technical advantages/bottlenecks for running local LLMs, and recommend the top 3 best local AI models that will run smoothly on their specific machine. Use a trendy, enthusiastic, and highly technical tone. Format the response nicely using Markdown.";
                 
@@ -140,8 +147,11 @@
                         if (!response.ok) {
                             const errorText = await response.text();
                             console.error("API Error Response:", errorText);
-                            if (response.status === 403) {
-                                throw new Error("Access Denied (403): Ensure you are viewing this inside the Canvas Preview button. If running as a local file, it will not work without an API Key.");
+                            if (response.status === 400 && errorText.includes("API key not valid")) {
+                                throw new Error("Invalid API Key: Please check the API key you entered and try again.");
+                            }
+                            if (response.status === 403 || response.status === 401) {
+                                throw new Error("Access Denied: Please provide a valid Gemini API Key in the field to use this tool.");
                             }
                             throw new Error(`HTTP error! status: ${response.status} - ${errorText.substring(0, 50)}...`);
                         }
@@ -150,6 +160,12 @@
                         return data.candidates?.[0]?.content?.parts?.[0]?.text || "No prediction generated.";
                     } catch (err) {
                         console.error(`Attempt ${attempt + 1} failed:`, err);
+                        
+                        // Don't retry if it's an API key error, fail immediately so the user knows
+                        if (err.message.includes("Access Denied") || err.message.includes("Invalid API Key")) {
+                            throw err;
+                        }
+
                         attempt++;
                         if (attempt >= maxRetries) {
                             throw new Error(err.message || "Unable to connect to the AI model. Please try again later.");
@@ -161,6 +177,10 @@
 
             const handleSubmit = async (e) => {
                 e.preventDefault();
+                
+                // Require an API key if not running in the Canvas environment (we can loosely check this if customApiKey is empty but they hit submit)
+                // We will let the API call handle the empty key rejection for exact accuracy.
+
                 setLoading(true);
                 setError('');
                 setResult('');
@@ -306,9 +326,6 @@
                                                     className="w-full bg-slate-800/80 border border-slate-600 rounded-xl py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition shadow-inner placeholder-slate-500"
                                                 />
                                             </div>
-                                            <p className="text-xs text-brand-400 mt-2 bg-brand-400/10 p-3 rounded-lg border border-brand-400/20">
-                                                ✨ <strong>AI Magic:</strong> Just tell us the laptop/PC model and our AI will search its knowledge base to predict the best LLMs for its typical configuration!
-                                            </p>
                                         </div>
                                     )}
 
@@ -351,18 +368,15 @@
                                                     className="w-full bg-slate-800/80 border border-slate-600 rounded-xl py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition shadow-inner"
                                                 />
                                                 <datalist id="cpu-options">
-                                                    {/* Apple */}
                                                     <option value="Apple M1/M2/M3 (Base)" />
                                                     <option value="Apple M1/M2/M3 Pro" />
                                                     <option value="Apple M1/M2/M3 Max" />
                                                     <option value="Apple M1/M2 Ultra" />
                                                     <option value="Apple M4 (iPad Pro/Mac)" />
-                                                    {/* Intel */}
                                                     <option value="Intel Core i5 (12th-14th Gen)" />
                                                     <option value="Intel Core i7 (12th-14th Gen)" />
                                                     <option value="Intel Core i9 (12th-14th Gen)" />
                                                     <option value="Intel Core Ultra 5 / 7 / 9" />
-                                                    {/* AMD */}
                                                     <option value="AMD Ryzen 5 (5000/7000/8000 Series)" />
                                                     <option value="AMD Ryzen 7 (5000/7000/8000 Series)" />
                                                     <option value="AMD Ryzen 9 (5000/7000/8000 Series)" />
@@ -411,18 +425,15 @@
                                                     className="w-full bg-slate-800/80 border border-slate-600 rounded-xl py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition shadow-inner"
                                                 />
                                                 <datalist id="gpu-options">
-                                                    {/* Apple/Integrated */}
                                                     <option value="Apple Unified Memory (M-Series Built-in)" />
                                                     <option value="Intel Arc Graphics (Integrated)" />
                                                     <option value="AMD Radeon 780M (Integrated)" />
-                                                    {/* NVIDIA */}
                                                     <option value="NVIDIA RTX 3050 / 4050 (4-6GB VRAM)" />
                                                     <option value="NVIDIA RTX 3060 / 4060 (8GB VRAM)" />
                                                     <option value="NVIDIA RTX 3070 / 4070 (8-12GB VRAM)" />
                                                     <option value="NVIDIA RTX 3080 / 4080 (10-16GB VRAM)" />
                                                     <option value="NVIDIA RTX 3090 / 4090 (24GB VRAM)" />
                                                     <option value="NVIDIA RTX A6000 / Ada (48GB VRAM)" />
-                                                    {/* AMD */}
                                                     <option value="AMD Radeon RX 6600 / 7600 (8GB)" />
                                                     <option value="AMD Radeon RX 6700 / 7700 (12GB)" />
                                                     <option value="AMD Radeon RX 6800 / 7800 (16GB)" />
@@ -431,6 +442,27 @@
                                             </div>
                                         </div>
                                     )}
+
+                                    <div className="pt-4 border-t border-slate-700/50 mt-6">
+                                        <label className="block text-sm font-medium text-slate-300 mb-2">
+                                            Gemini API Key 
+                                            <span className="text-brand-400 text-xs ml-2 font-normal px-2 py-0.5 bg-brand-400/10 rounded">Required for GitHub Pages</span>
+                                        </label>
+                                        <div className="relative">
+                                            <input 
+                                                type="password" 
+                                                name="customApiKey" 
+                                                value={customApiKey} 
+                                                onChange={(e) => setCustomApiKey(e.target.value)} 
+                                                placeholder="Paste your API key here..."
+                                                className="w-full bg-slate-900/80 border border-slate-600 rounded-xl py-3 px-4 pl-10 text-white focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition shadow-inner placeholder-slate-600 text-sm"
+                                            />
+                                            <svg className="w-5 h-5 text-slate-500 absolute left-3 top-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"></path></svg>
+                                        </div>
+                                        <p className="text-xs text-slate-500 mt-2">
+                                            Get a free API key from <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-brand-400 hover:underline">Google AI Studio</a> to use this app.
+                                        </p>
+                                    </div>
 
                                     <button 
                                         type="submit" 
