@@ -66,6 +66,12 @@
         .prose ul li::before { content: "▹"; position: absolute; left: 0; top: 0px; font-size: 1.2em; color: #10b981; }
         .prose strong { color: #4ade80; font-weight: 600; }
         .prose code { background: rgba(0,0,0,0.4); padding: 0.2rem 0.4rem; border-radius: 0.25rem; color: #e2e8f0; font-family: monospace; border: 1px solid rgba(255,255,255,0.1); }
+        .prose table { width: 100%; border-collapse: collapse; margin-top: 1.5em; margin-bottom: 1.5em; font-size: 0.9em; }
+        .prose th { background: rgba(16, 185, 129, 0.1); color: #4ade80; font-weight: 600; text-align: left; padding: 12px; border: 1px solid rgba(255,255,255,0.1); }
+        .prose td { padding: 12px; border: 1px solid rgba(255,255,255,0.05); color: #e2e8f0; }
+        .prose tr:nth-child(even) { background: rgba(255,255,255,0.02); }
+        .prose a { color: #38bdf8; text-decoration: none; border-bottom: 1px solid transparent; transition: border-color 0.2s; }
+        .prose a:hover { border-color: #38bdf8; }
         
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
@@ -120,11 +126,14 @@
                 extraSpecs: ''
             });
 
+            // NEW STATE: Purpose of the AI
+            const [purpose, setPurpose] = useState('General Chat & Assistant');
+
             const [loading, setLoading] = useState(false);
             const [result, setResult] = useState('');
             const [error, setError] = useState('');
 
-            // NEW FUNCTION: Fetch available models from Google using the provided API Key
+            // Fetch available models from Google using the provided API Key
             const handleFetchModels = async () => {
                 if (!customApiKey.trim()) {
                     setKeyError("Please enter an API key first.");
@@ -152,9 +161,7 @@
                     setAvailableModels(genModels);
                     
                     if (genModels.length > 0) {
-                        // Try to default to a flash model, otherwise just pick the first one
                         const defaultModel = genModels.find(m => m.name.includes('flash')) || genModels[0];
-                        // The API returns names like "models/gemini-1.5-flash", we need to remove "models/" for our prediction URL
                         setSelectedModel(defaultModel.name.replace('models/', ''));
                     } else {
                         setKeyError("No text generation models found for this API key.");
@@ -170,14 +177,27 @@
             const fetchAIPrediction = async (promptText) => {
                 const apiKey = customApiKey.trim() || ""; 
                 
-                // Use the user's specifically selected model. If none is selected (or we are in Canvas preview), default to the preview model.
-                const modelName = apiKey && selectedModel ? selectedModel : "gemini-2.5-flash-preview-09-2025";
+                // CRITICAL FIX: If a custom key is provided, default to a standard public model (gemini-2.5-flash)
+                // If no key is provided, use the internal canvas preview model.
+                let modelName = "gemini-2.5-flash-preview-09-2025"; 
+                if (apiKey) {
+                    modelName = selectedModel || "gemini-2.5-flash"; 
+                }
+
                 const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
                 
-                const systemPrompt = "You are an expert AI hardware consultant. Your goal is to analyze computer specs, point out technical advantages/bottlenecks for running local LLMs, and recommend the top 3 best local AI models that will run smoothly on their specific machine. Use a trendy, enthusiastic, and highly technical tone. Format the response nicely using Markdown.";
+                // Heavily modified system prompt to force a concise table
+                const systemPrompt = `You are an expert AI hardware consultant. Your goal is to analyze computer specs and recommend the top 3 best local AI models for the user's specific intended purpose. 
+                
+                STRICT FORMATTING RULES:
+                1. Provide a maximum 2-sentence intro summarizing their hardware capability.
+                2. Output the recommendations strictly as a Markdown table.
+                3. The table must have these exact columns: "Model Name", "Parameters/Size", "Expected Speed (T/s)", "Best App to Run", "Download Link".
+                4. For the Download Link column, provide a real URL (e.g., huggingface.co or ollama.com links) formatted as an active markdown link.
+                5. Do not output long walls of text after the table. Be extremely concise.`;
                 
                 const payload = {
-                    contents: [{ parts: [{ text: systemPrompt + "\n\nUser Hardware Specs:\n" + promptText }] }]
+                    contents: [{ parts: [{ text: systemPrompt + "\n\nUser Request Details:\n" + promptText }] }]
                 };
 
                 let attempt = 0;
@@ -201,6 +221,9 @@
                             if (response.status === 403 || response.status === 401) {
                                 throw new Error("Access Denied: Please provide a valid Gemini API Key in the field to use this tool.");
                             }
+                            if (response.status === 404) {
+                                throw new Error(`Model Not Found (404): The model '${modelName}' is not accessible. If you pasted a custom API key, please click 'Load Models' to select a valid one.`);
+                            }
                             throw new Error(`HTTP error! status: ${response.status} - ${errorText.substring(0, 50)}...`);
                         }
                         
@@ -209,8 +232,10 @@
                     } catch (err) {
                         console.error(`Attempt ${attempt + 1} failed:`, err);
                         
-                        // Don't retry if it's an API key error, fail immediately so the user knows
-                        if (err.message.includes("Access Denied") || err.message.includes("Invalid API Key")) {
+                        // Don't retry if it's a hard rejection (API key, permissions, or missing model)
+                        if (err.message.includes("Access Denied") || 
+                            err.message.includes("Invalid API Key") || 
+                            err.message.includes("Model Not Found")) {
                             throw err;
                         }
 
@@ -225,9 +250,6 @@
 
             const handleSubmit = async (e) => {
                 e.preventDefault();
-                
-                // Require an API key if not running in the Canvas environment (we can loosely check this if customApiKey is empty but they hit submit)
-                // We will let the API call handle the empty key rejection for exact accuracy.
 
                 setLoading(true);
                 setError('');
@@ -244,25 +266,19 @@
                     prompt = `Analyze this specific computer model for running Local LLMs:
                     Brand: ${deviceInfo.brand}
                     Model/Series: ${deviceInfo.model}
-                    Additional Known Specs (if any): ${deviceInfo.extraSpecs || 'None provided. Please infer typical baseline specs for this model.'}
+                    Additional Known Specs: ${deviceInfo.extraSpecs || 'None provided.'}
+                    Primary Purpose for AI: ${purpose}
                     
-                    Please provide:
-                    1. A brief "AI Magic" analysis: What do these specific model specs mean for AI? 
-                    2. Recommendations: The top 3 local LLMs (like Llama 3, Mistral, etc.) that are the absolute best fit for this machine.
-                    3. Expected Performance: What tokens/second or general speed they can expect.
-                    4. Recommended Software: What app should they use to run it?`;
+                    Please generate the table of recommendations based on this setup and their intended purpose.`;
                 } else {
                     prompt = `Analyze these computer specs for running Local LLMs:
                     OS: ${specs.os}
                     CPU: ${specs.cpu}
                     RAM: ${specs.ram}
                     GPU: ${specs.gpu}
+                    Primary Purpose for AI: ${purpose}
                     
-                    Please provide:
-                    1. A brief "AI Magic" analysis: What do these specs mean for AI? (e.g., mention how unified memory works if it's a Mac).
-                    2. Recommendations: The top 3 local LLMs (like Llama 3, Mistral, etc.) that are the absolute best fit for this machine.
-                    3. Expected Performance: What tokens/second or general speed they can expect.
-                    4. Recommended Software: What app should they use to run it? (e.g., LM Studio, Ollama).`;
+                    Please generate the table of recommendations based on this setup and their intended purpose.`;
                 }
 
                 try {
@@ -490,6 +506,22 @@
                                             </div>
                                         </div>
                                     )}
+
+                                    {/* Purpose Selector (Applies to both modes) */}
+                                    <div className="pt-6 border-t border-slate-700/50 mt-6">
+                                        <label className="block text-sm font-medium text-slate-300 mb-2">What is the Primary Purpose for this AI?</label>
+                                        <select 
+                                            value={purpose} 
+                                            onChange={(e) => setPurpose(e.target.value)} 
+                                            className="w-full bg-slate-800/80 border border-slate-600 rounded-xl py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition shadow-inner"
+                                        >
+                                            <option value="General Chat & Assistant">General Chat & Assistant (Balanced)</option>
+                                            <option value="Coding & Software Development">Coding & Software Development</option>
+                                            <option value="Creative Writing & Roleplay">Creative Writing & Roleplay</option>
+                                            <option value="Data Analysis & Math">Data Analysis & Math</option>
+                                            <option value="Uncensored / Raw Output">Uncensored / Unrestricted Models</option>
+                                        </select>
+                                    </div>
 
                                     <div className="pt-4 border-t border-slate-700/50 mt-6">
                                         <label className="block text-sm font-medium text-slate-300 mb-2">
